@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>光復國民小學 · 出賽事務管理系統</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Noto Sans TC','PingFang TC',sans-serif; }
+  * { -webkit-tap-highlight-color: transparent; }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: white !important; }
+    #print-area { width: 100% !important; box-shadow: none !important; border: none !important; transform: none !important; }
+    @page { size: A4; margin: 12mm; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!--
+  ════════════════════════════════════════════════════════════
+  ⚙️  部署後請把下面這行的網址換成你自己的 Apps Script 網址
+      （見 README.md 步驟）。換好後全校老師打開這個網頁就會
+      自動連到同一份資料，不需要每個人再貼一次網址。
+  ════════════════════════════════════════════════════════════
+-->
+<script>
+  window.GF_BACKEND_URL = "https://script.google.com/macros/s/AKfycbzfS6lOeWOI6Bf_QRQIfTsHw1gh8lKvTx5krieLFwp17v-M4lzUgN1eWNYtTN5QVsln/exec";
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ═══════════════════════════════════════════
+// 後端（Google Apps Script）連線層
+// ═══════════════════════════════════════════
+const LS_URL_KEY = "gf-backend-url";
+function getBackendUrl() {
+  return (window.GF_BACKEND_URL && window.GF_BACKEND_URL.trim())
+      || localStorage.getItem(LS_URL_KEY) || "";
+}
+
+// GET 讀取全部資料（比賽 + 得獎記錄）
+async function apiLoadAll() {
+  const url = getBackendUrl();
+  if (!url) throw new Error("no-url");
+  const r = await fetch(url + (url.includes("?") ? "&" : "?") + "action=all&t=" + Date.now());
+  if (!r.ok) throw new Error("http " + r.status);
+  return await r.json();
+}
+// POST 寫入（用 text/plain 避免 CORS 預檢）
+async function apiPost(payload) {
+  const url = getBackendUrl();
+  if (!url) throw new Error("no-url");
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+  });
+  try { return await r.json(); } catch { return { result: "ok" }; }
+}
+
+// ═══════════════════════════════════════════
+// 小工具
+// ═══════════════════════════════════════════
+const formatTW = (dateStr) => {
+  if (!dateStr) return "　　年　　月　　日";
+  const d = new Date(dateStr);
+  if (isNaN(d)) return "　　年　　月　　日";
+  const y = d.getFullYear() - 1911;
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y} 年 ${m} 月 ${day} 日`;
+};
+const uid = () => "c" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+
+const inp = {
+  width: "100%", border: "1.5px solid #E2E8F0", borderRadius: 8,
+  padding: "8px 10px", fontSize: 13, color: "#1E293B", background: "#F8FAFC",
+  outline: "none", fontFamily: "'Noto Sans TC', sans-serif", boxSizing: "border-box",
+};
+
+function Field({ label, children, span2 }) {
+  return (
+    <div style={{ marginBottom: 11, gridColumn: span2 ? "1/-1" : undefined }}>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 4 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 檢核表資料
+// ═══════════════════════════════════════════
+const checklistSections = [
+  { id: "vehicle", icon: "🚌", title: "車輛申請", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE",
+    items: [
+      { id: "v1", label: "確認出發時間與返校時間" },
+      { id: "v2", label: "估算所需人數與座位數" },
+      { id: "v3", label: "提出租車申請" },
+      { id: "v6", label: "通知集合地點與時間" },
+    ] },
+  { id: "lunch", icon: "🍱", title: "午餐安排", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A",
+    items: [
+      { id: "l1", label: "確認活動當天是否退訂營養午餐" },
+      { id: "l2", label: "自行訂餐人數（含帶隊老師）" },
+      { id: "l3", label: "了解是否有特殊飲食需求（素食等）" },
+      { id: "l5", label: "申請誤餐費或自行處理餐費" },
+    ] },
+  { id: "leave", icon: "📋", title: "公假申請", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE",
+    items: [
+      { id: "p1", label: "確認比賽公文或邀請函已收到" },
+      { id: "p2", label: "列出所有參賽學生名單" },
+      { id: "p3", label: "填寫公假申請表" },
+      { id: "p4", label: "呈報處室核准" },
+      { id: "p7", label: "非公假賽事是否已請事假" },
+    ] },
+  { id: "homeroom", icon: "📢", title: "通知導師", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0",
+    items: [
+      { id: "h2", label: "準備給導師的書面通知" },
+    ] },
+  { id: "award_check", icon: "🏆", title: "得獎公告", color: "#DC2626", bg: "#FFF1F2", border: "#FECDD3",
+    items: [
+      { id: "a1", label: "記錄比賽成績與獎項名稱" },
+      { id: "a5", label: "於學校官網發布得獎消息" },
+      { id: "a8", label: "於學校粉專發布得獎消息" },
+      { id: "a6", label: "頒獎典禮或朝會表揚安排" },
+    ] },
+];
+const ALL_ITEM_IDS = checklistSections.flatMap(s => s.items.map(i => i.id));
+
+function blankDoc(name) {
+  return {
+    id: uid(),
+    info: { competitionName: name || "", competitionDate: "", competitionLocation: "", subject: "", teacherInCharge: "" },
+    checks: Object.fromEntries(ALL_ITEM_IDS.map(id => [id, false])),
+    notes: {},
+    updatedAt: "",
+  };
+}
+
+// ═══════════════════════════════════════════
+// 頁籤一：出賽檢核表
+// ═══════════════════════════════════════════
+function CheckSection({ sec, checks, notes, onToggle, onNote }) {
+  const [open, setOpen] = useState(true);
+  const [editNote, setEditNote] = useState(null);
+  const done = sec.items.filter(i => checks[i.id]).length;
+  const total = sec.items.length;
+  const allDone = done === total;
+  return (
+    <div style={{ border: `1.5px solid ${allDone ? sec.color : sec.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 12, background: "#fff", boxShadow: allDone ? `0 0 0 3px ${sec.border}` : "0 1px 4px rgba(0,0,0,0.05)", transition: "all 0.3s" }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: sec.bg, cursor: "pointer", userSelect: "none" }}>
+        <span style={{ fontSize: 20 }}>{sec.icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: "#1F2937" }}>{sec.title}</span>
+            {allDone && <span style={{ fontSize: 11, background: sec.color, color: "#fff", borderRadius: 99, padding: "2px 8px", fontWeight: 600 }}>✓ 完成</span>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+            <div style={{ flex: 1, height: 5, borderRadius: 99, background: "#E5E7EB", overflow: "hidden" }}>
+              <div style={{ width: `${(done / total) * 100}%`, height: "100%", background: sec.color, borderRadius: 99, transition: "width 0.4s" }} />
+            </div>
+            <span style={{ fontSize: 11, color: "#6B7280" }}>{done}/{total}</span>
+          </div>
+        </div>
+        <span style={{ color: "#9CA3AF", fontSize: 16, transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "none" }}>▾</span>
+      </div>
+      {open && (
+        <div style={{ padding: "6px 0" }}>
+          {sec.items.map((item, idx) => (
+            <div key={item.id} style={{ padding: "9px 16px", borderBottom: idx < sec.items.length - 1 ? "1px solid #F3F4F6" : "none", background: checks[item.id] ? "#F9FAFB" : "#fff" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div onClick={() => onToggle(item.id)} style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${checks[item.id] ? sec.color : "#D1D5DB"}`, background: checks[item.id] ? sec.color : "#fff", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, marginTop: 1, transition: "all 0.15s" }}>
+                  {checks[item.id] && <span style={{ color: "#fff", fontSize: 12, fontWeight: 800 }}>✓</span>}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: 13, color: checks[item.id] ? "#9CA3AF" : "#374151", textDecoration: checks[item.id] ? "line-through" : "none" }}>{item.label}</span>
+                  {editNote === item.id
+                    ? <input autoFocus value={notes[item.id] || ""} onChange={e => onNote(item.id, e.target.value)} onBlur={() => setEditNote(null)} placeholder="備註…" style={{ display: "block", marginTop: 4, width: "100%", border: `1px solid ${sec.color}`, borderRadius: 6, padding: "3px 8px", fontSize: 12, outline: "none", fontFamily: "'Noto Sans TC', sans-serif", boxSizing: "border-box" }} />
+                    : notes[item.id]
+                      ? <span onClick={() => setEditNote(item.id)} style={{ display: "block", fontSize: 11, color: sec.color, marginTop: 2, cursor: "pointer", background: sec.bg, borderRadius: 4, padding: "1px 6px", width: "fit-content" }}>📝 {notes[item.id]}</span>
+                      : <span onClick={() => setEditNote(item.id)} style={{ fontSize: 11, color: "#D1D5DB", cursor: "pointer", marginTop: 2, display: "inline-block" }}>＋ 備註</span>
+                  }
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TabChecklist({ doc, patchDoc, saveStatus }) {
+  const totalItems = ALL_ITEM_IDS.length;
+  const totalDone = Object.values(doc.checks).filter(Boolean).length;
+  const pct = Math.round((totalDone / totalItems) * 100);
+  const barColor = pct === 100 ? "#059669" : pct >= 60 ? "#D97706" : "#2563EB";
+
+  const toggle = (id) => patchDoc(d => ({ ...d, checks: { ...d.checks, [id]: !d.checks[id] } }));
+  const setNote = (id, val) => patchDoc(d => ({ ...d, notes: { ...d.notes, [id]: val } }));
+  const setInfo = (k, v) => patchDoc(d => ({ ...d, info: { ...d.info, [k]: v } }));
+  const resetChecks = () => {
+    if (!window.confirm("確定要重設這場比賽的所有勾選？")) return;
+    patchDoc(d => ({ ...d, checks: Object.fromEntries(ALL_ITEM_IDS.map(id => [id, false])) }));
+  };
+
+  return (
+    <div style={{ maxWidth: 680, margin: "0 auto", padding: "16px 16px 40px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, padding: "16px 18px", marginBottom: 14, boxShadow: "0 1px 6px rgba(0,0,0,0.07)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#1F2937" }}>整體進度</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {saveStatus === "saved" && <span style={{ fontSize: 11, color: "#059669" }}>✓ 已儲存</span>}
+            {saveStatus === "saving" && <span style={{ fontSize: 11, color: "#94A3B8" }}>儲存中…</span>}
+            <span style={{ fontSize: 22, fontWeight: 800, color: barColor }}>{pct}%</span>
+          </div>
+        </div>
+        <div style={{ height: 8, borderRadius: 99, background: "#E5E7EB", overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg,#2563EB,${barColor})`, borderRadius: 99, transition: "width 0.5s" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+          <span style={{ fontSize: 12, color: "#6B7280" }}>已完成 {totalDone} 項，共 {totalItems} 項 {pct === 100 && "🎉"}</span>
+          <button onClick={resetChecks} style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>🔄 重設</button>
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", marginBottom: 14, boxShadow: "0 1px 6px rgba(0,0,0,0.07)", border: "1.5px solid #BAE6FD" }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: "#0369A1", marginBottom: 4 }}>📌 比賽基本資料</div>
+        <div style={{ fontSize: 11, color: "#0369A1", marginBottom: 12, background: "#EFF6FF", borderRadius: 7, padding: "5px 10px" }}>
+          ✨ 此處填寫後，導師通知單與得獎彙整會即時同步，不需重複輸入
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+          <Field label="比賽名稱" span2><input style={inp} value={doc.info.competitionName || ""} onChange={e => setInfo("competitionName", e.target.value)} placeholder="全國科學展覽" /></Field>
+          <Field label="比賽日期"><input style={inp} type="date" value={doc.info.competitionDate || ""} onChange={e => setInfo("competitionDate", e.target.value)} /></Field>
+          <Field label="比賽地點"><input style={inp} value={doc.info.competitionLocation || ""} onChange={e => setInfo("competitionLocation", e.target.value)} placeholder="臺北市" /></Field>
+          <Field label="隊伍／科目"><input style={inp} value={doc.info.subject || ""} onChange={e => setInfo("subject", e.target.value)} placeholder="科學、資訊…" /></Field>
+          <Field label="帶隊老師"><input style={inp} value={doc.info.teacherInCharge || ""} onChange={e => setInfo("teacherInCharge", e.target.value)} placeholder="王老師" /></Field>
+        </div>
+      </div>
+
+      {checklistSections.map(sec => (
+        <CheckSection key={sec.id} sec={sec} checks={doc.checks} notes={doc.notes} onToggle={toggle} onNote={setNote} />
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 頁籤二：導師通知單
+// ═══════════════════════════════════════════
+function PrintSlip({ info, local }) {
+  const students = (local.students || "").split("\n").map(s => s.trim()).filter(Boolean);
+  return (
+    <div id="print-area" style={{ width: 640, margin: "0 auto", background: "#fff", fontFamily: "'Noto Sans TC','PingFang TC',sans-serif", fontSize: 14, color: "#111", lineHeight: 2, padding: "30px 44px 24px", boxSizing: "border-box", position: "relative" }}>
+      <div style={{ textAlign: "center", marginBottom: 2 }}>
+        <div style={{ fontSize: 21, fontWeight: 800, letterSpacing: 3 }}>光復國民小學</div>
+        <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 4, marginTop: 2 }}>學生參賽通知單</div>
+      </div>
+      <div style={{ borderTop: "2px solid #111", margin: "12px 0 10px" }} />
+      <div style={{ textAlign: "right", fontSize: 13, color: "#475569", marginBottom: 10 }}>通知日期：{formatTW(local.noticeDate)}</div>
+      <div style={{ fontSize: 14, marginBottom: 10 }}>
+        <span style={{ fontWeight: 700 }}>敬啟　</span>
+        <span style={{ borderBottom: "1px solid #333", padding: "0 4px" }}>{local.classTeacher || "　　　　"}</span>
+        <span style={{ fontWeight: 700 }}> 班導師</span>　您好，
+      </div>
+      <div style={{ fontSize: 14, textIndent: "2em", lineHeight: 2.1, marginBottom: 14, color: "#1E293B" }}>
+        本校{info.subject ? `【${info.subject}】` : ""}學生將於
+        <span style={{ fontWeight: 700, margin: "0 2px" }}>{formatTW(info.competitionDate)}</span>
+        前往<span style={{ fontWeight: 700, margin: "0 2px" }}>{info.competitionLocation || "　　　　"}</span>
+        參加<span style={{ fontWeight: 700, margin: "0 2px" }}>「{info.competitionName || "　　　　　　"}」</span>
+        比賽，屆時學生需請
+        <span style={{ fontWeight: 700, color: local.leaveType === "公假" ? "#1D4ED8" : "#B45309", margin: "0 2px" }}>{local.leaveType}</span>
+        ，煩請惠予核准，並協助提醒學生準時出發，謝謝您的配合！
+      </div>
+      <div style={{ border: "1.5px solid #CBD5E1", borderRadius: 8, overflow: "hidden", marginBottom: 16, fontSize: 13.5 }}>
+        {[
+          ["比賽名稱", info.competitionName || "　"],
+          ["比賽日期", formatTW(info.competitionDate)],
+          ["比賽地點", info.competitionLocation || "　"],
+          ["假　　別", local.leaveType],
+          ["帶隊老師", info.teacherInCharge || "　"],
+          ["參賽學生", students.length > 0 ? `${students.join("、")}（共 ${students.length} 人）` : "　"],
+          ...(local.note ? [["備　　註", local.note]] : []),
+        ].map(([label, val], i, arr) => (
+          <div key={i} style={{ display: "flex", borderBottom: i < arr.length - 1 ? "1px solid #E2E8F0" : "none", background: i % 2 === 0 ? "#F8FAFC" : "#fff" }}>
+            <div style={{ width: 90, padding: "7px 12px", fontWeight: 700, borderRight: "1px solid #E2E8F0", flexShrink: 0, color: "#374151" }}>{label}</div>
+            <div style={{ padding: "7px 14px", flex: 1, color: "#1E293B" }}>{val}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 36, marginBottom: 18, fontSize: 13 }}>
+        {["行政教師", "組　　長", "主　　任"].map(t => (
+          <div key={t} style={{ textAlign: "center" }}>
+            <div style={{ fontWeight: 700, marginBottom: 30 }}>{t}</div>
+            <div style={{ borderBottom: "1px solid #555", width: 60 }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ position: "relative", margin: "0 -44px" }}>
+        <div style={{ borderTop: "2px dashed #94A3B8" }} />
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 64, height: 64, borderRadius: "50%", border: "2px dashed #94A3B8", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94A3B8", zIndex: 2, textAlign: "center", lineHeight: 1.3 }}>
+          處室<br />印章
+        </div>
+        <div style={{ textAlign: "right", paddingRight: 44, marginTop: 4, fontSize: 11, color: "#94A3B8" }}>✂ 請簽章後交回承辦老師</div>
+      </div>
+      <div style={{ padding: "14px 44px 0", fontSize: 13, color: "#374151" }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>【回條】{local.classTeacher || "　　"} 班導師回簽</div>
+        <div style={{ lineHeight: 2.1 }}>
+          本人已知悉<span style={{ borderBottom: "1px solid #333", padding: "0 6px", margin: "0 3px" }}>{students.length > 0 ? students.join("、") : "　　　　"}</span>
+          同學於<span style={{ fontWeight: 700, margin: "0 4px" }}>{formatTW(info.competitionDate)}</span>
+          請<span style={{ fontWeight: 700, margin: "0 4px" }}>{local.leaveType}</span>
+          參加「{info.competitionName || "　　　　　　"}」，並同意核假。
+        </div>
+        <div style={{ display: "flex", gap: 48, marginTop: 12 }}>
+          <span>導師簽章：＿＿＿＿＿＿</span>
+          <span>日期：＿＿＿年＿＿月＿＿日</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabNotice({ info }) {
+  const [local, setLocal] = useState({
+    noticeDate: new Date().toISOString().slice(0, 10),
+    leaveType: "公假",
+    classTeacher: "",
+    students: "",
+    note: "",
+  });
+  const setL = k => e => setLocal(l => ({ ...l, [k]: e.target.value }));
+
+  return (
+    <div style={{ maxWidth: 1020, margin: "0 auto", padding: "16px 16px 40px", display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div className="no-print" style={{ width: 268, flexShrink: 0, background: "#fff", borderRadius: 16, padding: "16px 14px", boxShadow: "0 2px 10px rgba(0,0,0,0.07)" }}>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#1E293B", marginBottom: 10, borderBottom: "2px solid #EFF6FF", paddingBottom: 9 }}>✏️ 通知單專用欄位</div>
+        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 9, padding: "9px 12px", marginBottom: 12, fontSize: 12, color: "#1D4ED8" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>✨ 已從檢核表同步</div>
+          <div style={{ lineHeight: 1.9 }}>
+            比賽：{info.competitionName || "—"}<br />
+            日期：{formatTW(info.competitionDate)}<br />
+            地點：{info.competitionLocation || "—"}<br />
+            科目：{info.subject || "—"}<br />
+            帶隊：{info.teacherInCharge || "—"}
+          </div>
+          <div style={{ fontSize: 11, color: "#60A5FA", marginTop: 4 }}>如需修改請至「出賽檢核表」頁籤</div>
+        </div>
+        <Field label="通知日期"><input style={inp} type="date" value={local.noticeDate} onChange={setL("noticeDate")} /></Field>
+        <Field label="收件導師班級"><input style={inp} value={local.classTeacher} onChange={setL("classTeacher")} placeholder="一年甲班" /></Field>
+        <Field label="假別">
+          <div style={{ display: "flex", gap: 14 }}>
+            {["公假", "事假"].map(opt => (
+              <label key={opt} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 14, fontWeight: local.leaveType === opt ? 700 : 400, color: local.leaveType === opt ? "#1D4ED8" : "#475569" }}>
+                <input type="radio" name="leaveType" value={opt} checked={local.leaveType === opt} onChange={setL("leaveType")} style={{ accentColor: "#2563EB", width: 15, height: 15 }} />
+                {opt}
+              </label>
+            ))}
+          </div>
+        </Field>
+        <Field label="參賽學生（一行一位）">
+          <textarea style={{ ...inp, minHeight: 80, resize: "vertical" }} value={local.students} onChange={setL("students")} placeholder={"王小明\n李小花\n陳大雄"} />
+        </Field>
+        <Field label="備註"><input style={inp} value={local.note} onChange={setL("note")} placeholder="請攜帶學生證" /></Field>
+      </div>
+
+      <div style={{ flex: 1, minWidth: 300 }}>
+        <div style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 14px rgba(0,0,0,0.09)" }}>
+          <div className="no-print" style={{ background: "#F8FAFC", padding: "9px 16px", borderBottom: "1px solid #E2E8F0", fontSize: 12, color: "#64748B", display: "flex", justifyContent: "space-between" }}>
+            <span>通知單預覽（列印為 A4）</span>
+            <span style={{ color: "#94A3B8" }}>騎縫章圓圈為印章位置</span>
+          </div>
+          <div style={{ padding: "12px 0", overflowX: "auto" }}>
+            <div style={{ transform: "scale(0.82)", transformOrigin: "top left", width: "122%" }}>
+              <PrintSlip info={info} local={local} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 頁籤三：得獎彙整
+// ═══════════════════════════════════════════
+const LEVELS = ["校內", "縣市級", "區域級", "全國級", "國際級", "民間自辦"];
+const RANKS = ["第一名", "第二名", "第三名", "第四名", "第五名", "第六名", "第七名", "第八名"];
+const MEDALS = ["金牌", "銀牌", "銅牌"];
+const GRADES = ["特優", "優等", "佳作", "入選"];
+
+function TabAward({ info, awards, onSubmitted, backendReady }) {
+  const [local, setLocal] = useState({
+    school_year: "", organizer: "", level: "縣市級", group: "",
+    award_type: "名次", award_rank: "第一名", award_medal: "金牌",
+    award_grade: "特優", award_other: "", students: "", note: "",
+  });
+  const getAwardString = (l) => {
+    if (l.award_type === "名次") return l.award_rank;
+    if (l.award_type === "牌") return l.award_medal;
+    if (l.award_type === "等第") return l.award_grade;
+    return l.award_other;
+  };
+  const [status, setStatus] = useState(null);
+  const setL = k => e => setLocal(l => ({ ...l, [k]: e.target.value }));
+
+  const submit = async () => {
+    if (!backendReady) { setStatus("nourl"); setTimeout(() => setStatus(null), 4000); return; }
+    setStatus("sending");
+    const record = {
+      school_year: local.school_year,
+      competition_name: info.competitionName || "",
+      competition_date: info.competitionDate || "",
+      organizer: local.organizer,
+      level: local.level,
+      category: info.subject || "",
+      group: local.group,
+      award: getAwardString(local),
+      students: local.students,
+      teacher: info.teacherInCharge || "",
+      note: local.note,
+      submitted_at: new Date().toLocaleString("zh-TW"),
+    };
+    try {
+      await apiPost({ action: "award", record });
+      setLocal(l => ({ ...l, students: "", note: "", organizer: "", group: "", award_other: "" }));
+      setStatus("success");
+      if (onSubmitted) onSubmitted();
+      setTimeout(() => setStatus(null), 4000);
+    } catch {
+      setStatus("error");
+      setTimeout(() => setStatus(null), 4000);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 680, margin: "0 auto", padding: "16px 16px 40px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, padding: "16px", boxShadow: "0 1px 6px rgba(0,0,0,0.07)", marginBottom: 14 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#1E293B", marginBottom: 10, borderBottom: "2px solid #F0FDFA", paddingBottom: 9 }}>🏆 填寫得獎資料</div>
+
+        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 9, padding: "9px 12px", marginBottom: 12, fontSize: 12, color: "#1D4ED8" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>✨ 已從檢核表同步</div>
+          <div style={{ lineHeight: 1.9 }}>
+            比賽名稱：{info.competitionName || "—"}　比賽日期：{formatTW(info.competitionDate)}<br />
+            競賽科目：{info.subject || "—"}　指導老師：{info.teacherInCharge || "—"}
+          </div>
+          <div style={{ fontSize: 11, color: "#60A5FA", marginTop: 4 }}>如需修改請至「出賽檢核表」頁籤</div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+          <Field label="學年度"><input style={inp} value={local.school_year} onChange={setL("school_year")} placeholder="例：114學年度" /></Field>
+          <Field label="主辦單位"><input style={inp} value={local.organizer} onChange={setL("organizer")} placeholder="教育部" /></Field>
+          <Field label="比賽層級">
+            <select style={inp} value={local.level} onChange={setL("level")}>{LEVELS.map(l => <option key={l}>{l}</option>)}</select>
+          </Field>
+          <Field label="組別"><input style={inp} value={local.group} onChange={setL("group")} placeholder="國小組、個人賽" /></Field>
+        </div>
+
+        <div style={{ marginBottom: 11 }}>
+          <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 6 }}>得獎名次</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            {["名次", "牌", "等第", "其他"].map(t => (
+              <button key={t} onClick={() => setLocal(l => ({ ...l, award_type: t }))} style={{ padding: "5px 14px", borderRadius: 7, border: `1.5px solid ${local.award_type === t ? "#0D9488" : "#E2E8F0"}`, background: local.award_type === t ? "#0D9488" : "#fff", color: local.award_type === t ? "#fff" : "#475569", fontSize: 13, fontWeight: local.award_type === t ? 700 : 400, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>
+                {t}
+              </button>
+            ))}
+          </div>
+          {local.award_type === "名次" && (
+            <select style={inp} value={local.award_rank} onChange={setL("award_rank")}>{RANKS.map(r => <option key={r}>{r}</option>)}</select>
+          )}
+          {local.award_type === "牌" && (
+            <select style={inp} value={local.award_medal} onChange={setL("award_medal")}>{MEDALS.map(m => <option key={m}>{m}</option>)}</select>
+          )}
+          {local.award_type === "等第" && (
+            <select style={inp} value={local.award_grade} onChange={setL("award_grade")}>{GRADES.map(g => <option key={g}>{g}</option>)}</select>
+          )}
+          {local.award_type === "其他" && (
+            <input style={inp} value={local.award_other} onChange={setL("award_other")} placeholder="請輸入得獎名稱" />
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+          <Field label="得獎學生姓名" span2><input style={inp} value={local.students} onChange={setL("students")} placeholder="王小明、李小花（多人用頓號分隔）" /></Field>
+          <Field label="備註" span2>
+            <input style={inp} value={local.note} onChange={setL("note")} placeholder="已通知家長" />
+            <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>💡 是否排入公開頒獎序列</div>
+          </Field>
+        </div>
+
+        {status === "nourl" && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 9, padding: "9px 12px", fontSize: 13, color: "#DC2626", marginBottom: 10 }}>⚠ 尚未連接後端，請先在右上角「⚙️ 設定」貼上 Apps Script 網址</div>}
+        {status === "error" && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 9, padding: "9px 12px", fontSize: 13, color: "#DC2626", marginBottom: 10 }}>❌ 送出失敗，請確認後端網址與網路連線</div>}
+        {status === "success" && <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 9, padding: "9px 12px", fontSize: 13, color: "#16A34A", marginBottom: 10 }}>🎉 已成功送出到 Google Sheets！</div>}
+
+        <button onClick={submit} disabled={status === "sending"} style={{ width: "100%", padding: "12px", background: status === "sending" ? "#93C5FD" : "linear-gradient(135deg,#0D9488,#0F766E)", color: "#fff", border: "none", borderRadius: 11, fontSize: 14, fontWeight: 700, cursor: status === "sending" ? "not-allowed" : "pointer", fontFamily: "'Noto Sans TC',sans-serif", boxShadow: "0 3px 10px rgba(13,148,136,0.3)" }}>
+          {status === "sending" ? "⏳ 送出中…" : "📤 送出到 Google Sheets"}
+        </button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 6px rgba(0,0,0,0.07)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: "#1E293B" }}>📜 全校得獎記錄（共 {awards.length} 筆）</span>
+          <span style={{ fontSize: 11, color: "#94A3B8" }}>來自 Google Sheets · 全校共用</span>
+        </div>
+        {awards.length === 0
+          ? <div style={{ fontSize: 12, color: "#94A3B8", textAlign: "center", padding: "16px 0" }}>目前尚無記錄，送出後會顯示在這裡</div>
+          : awards.slice().reverse().map((r, i) => (
+            <div key={i} style={{ border: "1px solid #E2E8F0", borderRadius: 10, padding: "9px 12px", marginBottom: 8, background: "#FAFBFF" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1E293B" }}>{r.competition_name || "（未填比賽名稱）"}　<span style={{ color: "#0D9488" }}>{r.award}</span></div>
+                  <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{[r.level, r.group, r.students && ("學生：" + r.students), r.teacher && ("指導：" + r.teacher)].filter(Boolean).join("・")}</div>
+                </div>
+                <span style={{ fontSize: 11, color: "#94A3B8", whiteSpace: "nowrap", marginLeft: 8 }}>{r.submitted_at}</span>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 設定視窗（貼後端網址）
+// ═══════════════════════════════════════════
+function SetupModal({ initialUrl, onSave, onClose }) {
+  const [url, setUrl] = useState(initialUrl || "");
+  return (
+    <div className="no-print" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: "20px 22px", maxWidth: 520, width: "100%", maxHeight: "86vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.3)" }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: "#1E293B", marginBottom: 4 }}>⚙️ 後端連線設定</div>
+        <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14, lineHeight: 1.8 }}>
+          貼上你的 Google Apps Script 部署網址，全校老師就會連到同一份資料。<br />
+          （設定方式請見專案附的 <strong>README.md</strong>；管理員設定一次後可寫進網頁，其他人就不用再貼。）
+        </div>
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://script.google.com/macros/s/AKfycb..../exec" style={{ ...inp, borderColor: url ? "#22C55E" : "#FED7AA", background: "#fff", marginBottom: 6 }} />
+        <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 16 }}>網址會記在這台電腦的瀏覽器，不會外洩。</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", border: "1.5px solid #E2E8F0", background: "#fff", borderRadius: 9, fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif", color: "#475569" }}>取消</button>
+          <button onClick={() => onSave(url.trim())} style={{ padding: "9px 18px", border: "none", background: "linear-gradient(135deg,#1E3A8A,#2563EB)", color: "#fff", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>儲存並連線</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 比賽選擇列
+// ═══════════════════════════════════════════
+function CompetitionBar({ docs, currentId, onSelect, onNew, onDelete, onRefresh }) {
+  const cur = docs.find(d => d.id === currentId);
+  return (
+    <div className="no-print" style={{ background: "#fff", borderBottom: "1px solid #E2E8F0", padding: "8px 16px" }}>
+      <div style={{ maxWidth: 1020, margin: "0 auto", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>📁 目前比賽</span>
+        <select value={currentId || ""} onChange={e => onSelect(e.target.value)} style={{ ...inp, width: "auto", minWidth: 220, maxWidth: 360, flex: "0 1 auto", fontWeight: 700, color: "#1E3A8A", background: "#fff" }}>
+          {docs.length === 0 && <option value="">（尚無比賽）</option>}
+          {docs.map(d => (
+            <option key={d.id} value={d.id}>{d.info.competitionName || "（未命名比賽）"}{d.info.competitionDate ? `　${d.info.competitionDate}` : ""}</option>
+          ))}
+        </select>
+        <button onClick={onNew} style={{ padding: "7px 13px", border: "1.5px solid #2563EB", background: "#EFF6FF", color: "#1E3A8A", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>＋ 新增比賽</button>
+        {cur && (
+          <button onClick={() => onDelete(cur.id)} style={{ padding: "7px 12px", border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>🗑 刪除</button>
+        )}
+        <button onClick={onRefresh} title="重新整理，抓取其他同仁的最新編輯" style={{ marginLeft: "auto", padding: "7px 12px", border: "1.5px solid #E2E8F0", background: "#fff", color: "#475569", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>🔄 重新整理</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// 主 App
+// ═══════════════════════════════════════════
+const TABS = [
+  { id: "checklist", label: "📋 出賽檢核表" },
+  { id: "notice",    label: "📄 導師通知單" },
+  { id: "award",     label: "🏆 得獎彙整" },
+];
+
+// 把後端讀回來的資料補成完整結構（避免缺欄位）
+function normalizeDoc(raw) {
+  const d = blankDoc();
+  d.id = raw.id || d.id;
+  d.info = { ...d.info, ...(raw.info || {}) };
+  d.checks = { ...d.checks, ...(raw.checks || {}) };
+  d.notes = { ...(raw.notes || {}) };
+  d.updatedAt = raw.updatedAt || "";
+  return d;
+}
+
+function App() {
+  const [tab, setTab] = useState("checklist");
+  const [loading, setLoading] = useState(true);
+  const [connError, setConnError] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);
+  const [showSetup, setShowSetup] = useState(false);
+
+  const [docs, setDocs] = useState([]);
+  const [currentId, setCurrentId] = useState("");
+  const [awards, setAwards] = useState([]);
+
+  const [backendUrl, setBackendUrl] = useState(getBackendUrl());
+  const backendReady = !!backendUrl;
+
+  const dirtyRef = useRef(false);     // 本機有未儲存的編輯
+  const saveTimer = useRef(null);
+
+  const cur = docs.find(d => d.id === currentId) || null;
+
+  // 從後端載入全部
+  const loadAll = useCallback(async ({ keepCurrent = true } = {}) => {
+    if (!getBackendUrl()) { setLoading(false); return; }
+    try {
+      const res = await apiLoadAll();
+      const loaded = (res.competitions || []).map(normalizeDoc);
+      setConnError(false);
+      setDocs(prev => {
+        // 若本機正在編輯，保留目前這份，其餘用伺服器版本
+        if (keepCurrent && dirtyRef.current && currentId) {
+          const mine = prev.find(d => d.id === currentId);
+          return loaded.map(d => (d.id === currentId && mine ? mine : d))
+                       .concat(mine && !loaded.some(d => d.id === currentId) ? [mine] : []);
+        }
+        return loaded;
+      });
+      setAwards(res.awards || []);
+      setCurrentId(prevId => {
+        const list = loaded;
+        if (prevId && list.some(d => d.id === prevId)) return prevId;
+        return (list[0] && list[0].id) || prevId || "";
+      });
+    } catch (e) {
+      setConnError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentId]);
+
+  // 首次載入
+  useEffect(() => { loadAll({ keepCurrent: false }); /* eslint-disable-next-line */ }, [backendUrl]);
+
+  // 定時同步（每 20 秒），抓其他同仁的編輯；本機正在改的那份不會被蓋掉
+  useEffect(() => {
+    if (!backendReady) return;
+    const t = setInterval(() => { if (!dirtyRef.current) loadAll(); }, 20000);
+    return () => clearInterval(t);
+  }, [backendReady, loadAll]);
+
+  // 修改目前這份比賽
+  const patchDoc = (fn) => {
+    if (!currentId) return;
+    dirtyRef.current = true;
+    setSaveStatus("saving");
+    setDocs(prev => prev.map(d => d.id === currentId ? fn(d) : d));
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(saveCurrent, 700);
+  };
+
+  const saveCurrent = async () => {
+    const doc = (docsRef.current || []).find(d => d.id === currentIdRef.current);
+    if (!doc) return;
+    if (!backendReady) { setSaveStatus("error"); return; }
+    try {
+      const stamped = { ...doc, updatedAt: new Date().toLocaleString("zh-TW") };
+      await apiPost({ action: "save", doc: stamped });
+      dirtyRef.current = false;
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(s => s === "saved" ? null : s), 2000);
+    } catch {
+      setSaveStatus("error");
+    }
+  };
+
+  // 用 ref 讓 debounce 的 saveCurrent 拿到最新值
+  const docsRef = useRef(docs); useEffect(() => { docsRef.current = docs; }, [docs]);
+  const currentIdRef = useRef(currentId); useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
+
+  const newCompetition = async () => {
+    const name = window.prompt("新增比賽，請輸入比賽名稱（之後可修改）：", "");
+    if (name === null) return;
+    const doc = blankDoc(name.trim());
+    setDocs(prev => [...prev, doc]);
+    setCurrentId(doc.id);
+    setTab("checklist");
+    if (backendReady) {
+      try { await apiPost({ action: "save", doc: { ...doc, updatedAt: new Date().toLocaleString("zh-TW") } }); } catch {}
+    }
+  };
+
+  const deleteCompetition = async (id) => {
+    const doc = docs.find(d => d.id === id);
+    if (!window.confirm(`確定要刪除「${(doc && doc.info.competitionName) || "未命名比賽"}」？此動作會影響全校共用資料，且無法復原。`)) return;
+    setDocs(prev => {
+      const next = prev.filter(d => d.id !== id);
+      if (id === currentId) setCurrentId((next[0] && next[0].id) || "");
+      return next;
+    });
+    if (backendReady) {
+      try { await apiPost({ action: "delete", id }); } catch {}
+    }
+  };
+
+  const saveBackendUrl = (url) => {
+    if (url) localStorage.setItem(LS_URL_KEY, url); else localStorage.removeItem(LS_URL_KEY);
+    setBackendUrl(url);
+    setShowSetup(false);
+    setLoading(true);
+  };
+
+  if (loading) return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F1F5F9", fontFamily: "'Noto Sans TC',sans-serif" }}>
+      <div style={{ textAlign: "center", color: "#64748B" }}><div style={{ fontSize: 32, marginBottom: 10 }}>⏳</div><div>載入中…</div></div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#F1F5F9", fontFamily: "'Noto Sans TC','PingFang TC',sans-serif" }}>
+      <div className="no-print" style={{ background: "linear-gradient(135deg,#1E3A8A,#2563EB)", padding: "18px 20px 0" }}>
+        <div style={{ maxWidth: 1020, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#93C5FD", letterSpacing: 3, marginBottom: 2 }}>光復國民小學</div>
+              <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, color: "#fff" }}>🏅 出賽事務管理系統</h1>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {saveStatus === "saved" && <span style={{ fontSize: 11, color: "#93C5FD" }}>✓ 已儲存</span>}
+              {saveStatus === "saving" && <span style={{ fontSize: 11, color: "#BFDBFE" }}>儲存中…</span>}
+              {saveStatus === "error" && <span style={{ fontSize: 11, color: "#FCA5A5" }}>⚠ 儲存失敗</span>}
+              {tab === "notice" && cur && (
+                <button onClick={() => window.print()} style={{ background: "#fff", color: "#1E3A8A", border: "none", borderRadius: 9, padding: "8px 16px", fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif", fontWeight: 700 }}>
+                  🖨 列印通知單
+                </button>
+              )}
+              <button onClick={() => setShowSetup(true)} title="後端連線設定" style={{ background: "rgba(255,255,255,0.18)", color: "#fff", border: "none", borderRadius: 9, padding: "8px 12px", fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>⚙️ 設定</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "9px 18px", border: "none", borderRadius: "10px 10px 0 0", background: tab === t.id ? "#F1F5F9" : "rgba(255,255,255,0.12)", color: tab === t.id ? "#1E3A8A" : "#BFDBFE", fontWeight: tab === t.id ? 800 : 500, fontSize: 13, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif", transition: "all 0.15s" }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {!backendReady && (
+        <div className="no-print" style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 16px" }}>
+          <div style={{ maxWidth: 1020, margin: "0 auto", fontSize: 12.5, color: "#92400E", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span>⚠ 尚未連接共用後端，目前資料無法與同仁同步。請點右上角</span>
+            <button onClick={() => setShowSetup(true)} style={{ padding: "4px 10px", border: "1px solid #D97706", background: "#fff", color: "#B45309", borderRadius: 7, fontSize: 12, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif", fontWeight: 700 }}>⚙️ 設定</button>
+            <span>貼上 Apps Script 網址（步驟見 README）。</span>
+          </div>
+        </div>
+      )}
+      {backendReady && connError && (
+        <div className="no-print" style={{ background: "#FEF2F2", borderBottom: "1px solid #FECACA", padding: "10px 16px" }}>
+          <div style={{ maxWidth: 1020, margin: "0 auto", fontSize: 12.5, color: "#DC2626" }}>
+            ❌ 連線後端失敗，請確認網址正確、且 Apps Script 已部署為「任何人皆可存取」。可點右上角 ⚙️ 設定重新輸入。
+          </div>
+        </div>
+      )}
+
+      <CompetitionBar
+        docs={docs} currentId={currentId}
+        onSelect={(id) => { dirtyRef.current = false; setCurrentId(id); }}
+        onNew={newCompetition} onDelete={deleteCompetition}
+        onRefresh={() => { dirtyRef.current = false; setLoading(true); loadAll({ keepCurrent: false }); }}
+      />
+
+      {!cur ? (
+        <div style={{ maxWidth: 680, margin: "0 auto", padding: "60px 16px", textAlign: "center", color: "#64748B" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1E293B", marginBottom: 6 }}>目前還沒有任何比賽</div>
+          <div style={{ fontSize: 13, marginBottom: 18 }}>點下方按鈕建立第一場比賽，開始填寫檢核表。</div>
+          <button onClick={newCompetition} style={{ padding: "11px 22px", border: "none", background: "linear-gradient(135deg,#1E3A8A,#2563EB)", color: "#fff", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "'Noto Sans TC',sans-serif" }}>＋ 新增第一場比賽</button>
+        </div>
+      ) : (
+        <>
+          {tab === "checklist" && <TabChecklist doc={cur} patchDoc={patchDoc} saveStatus={saveStatus} />}
+          {tab === "notice"    && <TabNotice info={cur.info} />}
+          {tab === "award"     && <TabAward info={cur.info} awards={awards} backendReady={backendReady} onSubmitted={() => loadAll()} />}
+        </>
+      )}
+
+      {showSetup && <SetupModal initialUrl={backendUrl} onSave={saveBackendUrl} onClose={() => setShowSetup(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
